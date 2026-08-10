@@ -1,32 +1,24 @@
-//
-//  IntelGuardianApp.swift
-//  IntelGuardian
-//
-//  Created by Maxwell on 2026/8/8.
-//
-
 import SwiftUI
-import SwiftData
 
 @main
 struct IntelGuardianApp: App {
-    var sharedModelContainer: ModelContainer = {
-        let schema = Schema([
-            Item.self,
-        ])
-        let modelConfiguration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: false)
+    @StateObject private var settings = AppSettings()
+    @StateObject private var monitor: MonitorService
 
-        do {
-            return try ModelContainer(for: schema, configurations: [modelConfiguration])
-        } catch {
-            fatalError("Could not create ModelContainer: \(error)")
-        }
-    }()
+    init() {
+        let settings = AppSettings()
+        _settings = StateObject(wrappedValue: settings)
+        _monitor = StateObject(wrappedValue: MonitorService(settings: settings))
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(settings)
+                .environmentObject(monitor)
+                #if os(macOS)
+                .frame(minWidth: 680, idealWidth: 680, minHeight: 420, idealHeight: 420)
+                #endif
         }
-        .modelContainer(sharedModelContainer)
     }
 }
