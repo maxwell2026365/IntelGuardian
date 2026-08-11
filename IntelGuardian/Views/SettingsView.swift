@@ -2,8 +2,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
-    var monitor: MonitorService? = nil
-    @EnvironmentObject private var monitorEnv: MonitorService
+    @ObservedObject var monitor: MonitorService
 
     @State private var showTestResult = false
     @State private var testResultMessage = ""
@@ -11,10 +10,6 @@ struct SettingsView: View {
     @State private var tempAlert = false
     @State private var charge80Alert = false
     @State private var charge20Alert = false
-
-    private var effectiveMonitor: MonitorService? {
-        monitor ?? monitorEnv
-    }
 
     var body: some View {
         ScrollView {
@@ -28,35 +23,33 @@ struct SettingsView: View {
                         tint: .blue,
                         isOn: Binding(
                             get: { settings.monitoringEnabled },
-                            set: { settings.monitoringEnabled = $0; settings.sync() }
+                            set: { settings.monitoringEnabled = $0 }
                         )
                     )
 
-                    if let mon = effectiveMonitor {
-                        Divider()
-                        toggleRow(
-                            title: "后台监测",
-                            icon: "clock.fill",
-                            tint: .teal,
-                            isOn: Binding(
-                                get: { mon.isMonitoring },
-                                set: { enabled in
-                                    if enabled {
-                                        mon.start()
-                                    } else {
-                                        mon.stop()
-                                    }
+                    Divider()
+                    toggleRow(
+                        title: "后台监测",
+                        icon: "clock.fill",
+                        tint: .teal,
+                        isOn: Binding(
+                            get: { monitor.isMonitoring },
+                            set: { enabled in
+                                if enabled {
+                                    monitor.start()
+                                } else {
+                                    monitor.stop()
                                 }
-                            )
+                            }
                         )
-                    }
+                    )
                 }
 
                 SettingsCard(title: "邮件提醒（SMTP）", icon: "envelope.fill", tint: .orange) {
                     fieldRow("服务器") {
                         TextField("smtp.example.com", text: Binding(
                             get: { settings.smtpHost },
-                            set: { settings.smtpHost = $0; settings.sync() }
+                            set: { settings.smtpHost = $0 }
                         ))
                         #if os(iOS)
                         .textInputAutocapitalization(.never)
@@ -73,7 +66,6 @@ struct SettingsView: View {
                                 get: { String(settings.smtpPort) },
                                 set: {
                                     settings.smtpPort = Int($0) ?? 465
-                                    settings.sync()
                                 }
                             ))
                             #if os(iOS)
@@ -88,7 +80,7 @@ struct SettingsView: View {
                     fieldRow("账号") {
                         TextField("you@example.com", text: Binding(
                             get: { settings.smtpUser },
-                            set: { settings.smtpUser = $0; settings.sync() }
+                            set: { settings.smtpUser = $0 }
                         ))
                         #if os(iOS)
                         .textInputAutocapitalization(.never)
@@ -102,21 +94,21 @@ struct SettingsView: View {
                     fieldRow("授权码") {
                         SecureField("", text: Binding(
                             get: { settings.smtpPassword },
-                            set: { settings.smtpPassword = $0; settings.sync() }
+                            set: { settings.smtpPassword = $0 }
                         ))
                     }
 
                     fieldRow("发件人") {
                         TextField("IntelGuardian（可选）", text: Binding(
                             get: { settings.smtpSender },
-                            set: { settings.smtpSender = $0; settings.sync() }
+                            set: { settings.smtpSender = $0 }
                         ))
                     }
 
                     fieldRow("收件邮箱") {
                         TextField("you@example.com", text: Binding(
                             get: { settings.recipient },
-                            set: { settings.recipient = $0; settings.sync() }
+                            set: { settings.recipient = $0 }
                         ))
                         #if os(iOS)
                         .textInputAutocapitalization(.never)
@@ -166,7 +158,6 @@ struct SettingsView: View {
                             set: {
                                 tempAlert = $0
                                 settings.notifyBatteryTemp = $0
-                                settings.sync()
                             }
                         )
                     )
@@ -176,13 +167,13 @@ struct SettingsView: View {
                             .foregroundStyle(.red)
                             .frame(width: 18)
                         Text("热状态阈值")
-                            .frame(width: labelWidth, alignment: .trailing)
+                            .lineLimit(1)
+                            .fixedSize()
                         Spacer()
                         Picker("", selection: Binding(
                             get: { settings.thermalStateThresholdRaw },
                             set: {
                                 settings.thermalStateThresholdRaw = $0
-                                settings.sync()
                             }
                         )) {
                             ForEach(ThermalStateLevel.allCases, id: \.self) { state in
@@ -202,7 +193,6 @@ struct SettingsView: View {
                             set: {
                                 tempAlert = $0
                                 settings.notifyBatteryTemp = $0
-                                settings.sync()
                             }
                         )
                     )
@@ -212,7 +202,8 @@ struct SettingsView: View {
                             .foregroundStyle(.red)
                             .frame(width: 18)
                         Text("高温阈值")
-                            .frame(width: labelWidth, alignment: .trailing)
+                            .lineLimit(1)
+                            .fixedSize()
                         Spacer()
                         Text("\(String(format: "%.0f", settings.highBatteryTemp)) °C")
                             .monospacedDigit()
@@ -221,7 +212,6 @@ struct SettingsView: View {
                             get: { settings.highBatteryTemp },
                             set: {
                                 settings.highBatteryTemp = $0
-                                settings.sync()
                             }
                         ), in: 30...80, step: 1)
                         .labelsHidden()
@@ -239,7 +229,6 @@ struct SettingsView: View {
                             set: {
                                 charge80Alert = $0
                                 settings.notifyCharge80 = $0
-                                settings.sync()
                             }
                         )
                     )
@@ -253,7 +242,6 @@ struct SettingsView: View {
                             set: {
                                 charge20Alert = $0
                                 settings.notifyCharge20 = $0
-                                settings.sync()
                             }
                         )
                     )
@@ -294,6 +282,8 @@ struct SettingsView: View {
         }
         #if os(macOS)
         .background(Color(nsColor: .windowBackgroundColor))
+        #else
+        .background(Color.black.ignoresSafeArea())
         #endif
         .onAppear(perform: loadBooleans)
     }
@@ -301,50 +291,11 @@ struct SettingsView: View {
     // MARK: - Header
 
     private var header: some View {
-        VStack(spacing: 10) {
-            // Centered title
-            Text("IntelGuardian 设置")
-                .font(.title3.bold())
-                .frame(maxWidth: .infinity, alignment: .center)
-
-            // Icon + subtitle row
-            HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.blue.opacity(0.8), Color.indigo.opacity(0.8)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 52, height: 52)
-                    Image(systemName: "gauge.with.dots.needle.50percent")
-                        .font(.system(size: 26, weight: .medium))
-                        .foregroundStyle(.white)
-                }
-                .shadow(color: .indigo.opacity(0.4), radius: 6, y: 2)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("监控硬件状态并及时收到提醒")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-                Spacer()
-            }
-            Spacer()
-        }
-        .padding(12)
-        #if os(macOS)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
-                )
-        )
-        #endif
+        Text("IntelGuardian 设置")
+            .font(.title2.bold())
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 4)
+            .padding(.bottom, 2)
     }
 
     // MARK: - Reusable rows
@@ -387,7 +338,7 @@ struct SettingsView: View {
 
     private func sendTestEmail() {
         sendingTest = true
-        let samples = effectiveMonitor?.store.recentSamples(hours: 3) ?? []
+        let samples = monitor.store.recentSamples(hours: 3)
         Task {
             let outcome = await EmailService(settings: settings).sendTest(samples: samples)
             await MainActor.run {

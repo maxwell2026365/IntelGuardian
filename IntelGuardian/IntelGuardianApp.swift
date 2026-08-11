@@ -9,6 +9,9 @@ struct IntelGuardianApp: App {
         let settings = AppSettings()
         _settings = StateObject(wrappedValue: settings)
         _monitor = StateObject(wrappedValue: MonitorService(settings: settings))
+        #if os(iOS)
+        monitor.registerBackgroundRefresh()
+        #endif
     }
 
     var body: some Scene {
@@ -17,7 +20,7 @@ struct IntelGuardianApp: App {
                 .environmentObject(settings)
                 .environmentObject(monitor)
                 #if os(macOS)
-                .frame(minWidth: 680, idealWidth: 680, minHeight: 420, idealHeight: 420)
+                .frame(minWidth: 680, idealWidth: 760, minHeight: 420, idealHeight: 470)
                 #endif
         }
     }

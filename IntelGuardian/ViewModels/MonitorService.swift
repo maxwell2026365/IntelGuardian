@@ -1,5 +1,8 @@
 import Foundation
 import Combine
+#if os(iOS)
+import BackgroundTasks
+#endif
 
 /// Samples system metrics on a timer, stores them in a JSON-backed store,
 /// prunes old data, and evaluates battery/charge alert conditions, emailing
@@ -11,6 +14,10 @@ final class MonitorService: ObservableObject {
     private let emailService: EmailService
 
     private var timer: Timer?
+    /// On iOS the battery level from `UIDevice` updates slowly and coarsely,
+    /// so we poll it on a separate, faster timer and refresh `latest.batteryLevel`
+    /// in place — without inserting extra samples into the store.
+    private var batteryTimer: Timer?
     private var lastSample: SystemInfo?
     /// Cooldown timestamps for the two independent alert families:
     /// temperature (battery temp + thermal state) and charge (80% / 20%).
@@ -19,10 +26,21 @@ final class MonitorService: ObservableObject {
 
     @Published var latest: SystemInfo = SystemInfo(cpuTemp: nil, batteryTemp: nil, batteryLevel: -1, thermalState: nil)
     @Published var isMonitoring = false
+    #if os(macOS)
+    /// Live CPU-heat ranking shown on the dashboard: per-process accumulated
+    /// CPU time over the trailing 2-hour window. Empty until a second sample
+    /// lands (the first sample only establishes a baseline).
+    @Published var topProcesses: [ProcessUsage] = []
+    #endif
 
     /// Initial cooldown so the app doesn't spam on first launch when the
     /// battery is already past a threshold.
     private var coolDownUntil: Date?
+
+    #if os(macOS)
+    /// Computes the CPU-usage ranking from per-process CPU-time deltas.
+    private let processSampler = ProcessSampler()
+    #endif
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -35,12 +53,6 @@ final class MonitorService: ObservableObject {
         // (e.g. DashboardView) re-render when new samples land.
         store.objectWillChange.sink { [weak self] _ in
             self?.objectWillChange.send()
-        }
-        .store(in: &cancellables)
-
-        // Sync @Published settings to UserDefaults whenever they change.
-        settings.objectWillChange.sink { [settings] _ in
-            settings.sync()
         }
         .store(in: &cancellables)
     }
@@ -60,24 +72,129 @@ final class MonitorService: ObservableObject {
                 self?.sampleNow()
             }
         }
+        #if os(iOS)
+        // Poll battery level on a separate, faster cadence so the dashboard
+        // value tracks the status bar closely. This only updates `latest`
+        // in place — no extra samples are stored.
+        batteryTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.refreshBatteryLevel()
+            }
+        }
+        #endif
     }
 
     func stop() {
         timer?.invalidate()
         timer = nil
+        batteryTimer?.invalidate()
+        batteryTimer = nil
+        #if os(macOS)
+        processSampler.reset()
+        topProcesses = []
+        #endif
         isMonitoring = false
+    }
+
+    /// Re-reads only the battery level and updates `latest` in place. On iOS
+    /// `UIDevice.batteryLevel` lags and steps in 1% increments; re-reading is
+    /// cheap and `BatteryReader` caches the last non-stale value.
+    private func refreshBatteryLevel() {
+        #if os(iOS)
+        let level = BatteryReader.batteryLevel()
+        guard level >= 0, level != latest.batteryLevel else { return }
+        latest = SystemInfo(
+            cpuTemp: latest.cpuTemp,
+            batteryTemp: latest.batteryTemp,
+            batteryLevel: level,
+            thermalState: latest.thermalState,
+            isCharging: BatteryReader.isCharging()
+        )
+        #endif
     }
 
     func sampleNow() {
         let info = SystemInfo.current()
         latest = info
         insertSample(info)
+        #if os(macOS)
+        refreshTopProcesses()
+        #endif
 
         guard settings.monitoringEnabled, settings.isEmailConfigured else { return }
         guard let coolDownUntil else { return }
         guard Date() >= coolDownUntil else { return }
         evaluateAlerts(info)
     }
+
+    /// Manual "check now" used by the dashboard refresh button; records a sample
+    /// but does not evaluate email alerts.
+    func refreshNow() {
+        let info = SystemInfo.current()
+        latest = info
+        insertSample(info)
+        #if os(macOS)
+        refreshTopProcesses()
+        #endif
+    }
+
+    #if os(iOS)
+    /// Identifier for the background refresh task. Must match the
+    /// `BGTaskSchedulerPermittedIdentifiers` entry in Info.plist.
+    private static let bgRefreshIdentifier = "max.com.IntelGuardian.refresh"
+
+    /// Registers the background refresh handler and schedules the first task.
+    /// Call once at app launch (after the SMTP password is loaded). iOS only.
+    func registerBackgroundRefresh() {
+        BGTaskScheduler.shared.register(
+            forTaskWithIdentifier: Self.bgRefreshIdentifier,
+            using: nil
+        ) { [weak self] task in
+            guard let self, let task = task as? BGAppRefreshTask else {
+                task.setTaskCompleted(success: false)
+                return
+            }
+            self.handleBackgroundRefresh(task)
+        }
+        scheduleBackgroundRefresh()
+    }
+
+    /// Asks the system for the next background refresh opportunity. The system
+    /// decides when to run it; this only requests that a slot be granted.
+    func scheduleBackgroundRefresh() {
+        let request = BGAppRefreshTaskRequest(identifier: Self.bgRefreshIdentifier)
+        request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
+        do {
+            try BGTaskScheduler.shared.submit(request)
+        } catch {
+            // e.g. the user disabled background refresh for this app in Settings.
+        }
+    }
+
+    private func handleBackgroundRefresh(_ task: BGAppRefreshTask) {
+        scheduleBackgroundRefresh()
+
+        task.expirationHandler = {
+            task.setTaskCompleted(success: false)
+        }
+
+        guard settings.monitoringEnabled else {
+            task.setTaskCompleted(success: true)
+            return
+        }
+
+        sampleNow()
+        task.setTaskCompleted(success: true)
+    }
+    #endif
+
+    #if os(macOS)
+    /// Recomputes the CPU-heat ranking. The first call only establishes a
+    /// baseline (no deltas yet), so `topProcesses` stays empty until the second.
+    private func refreshTopProcesses() {
+        topProcesses = processSampler.sampleTopProcesses()
+    }
+    #endif
 
     private func insertSample(_ info: SystemInfo) {
         let sample = ThermalSample(
@@ -143,13 +260,5 @@ final class MonitorService: ObservableObject {
                 _ = await emailService.sendAlert(reason: reason, samples: samples)
             }
         }
-    }
-
-    /// Manual "check now" used by the dashboard refresh button; records a sample
-    /// but does not evaluate email alerts.
-    func refreshNow() {
-        let info = SystemInfo.current()
-        latest = info
-        insertSample(info)
     }
 }

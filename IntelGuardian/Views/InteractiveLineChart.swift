@@ -102,7 +102,7 @@ struct DualLineChart: View {
                 AxisTick()
                 AxisValueLabel(anchor: .top) {
                     if let date = value.as(Date.self) {
-                        Text(date.formatted(date: .omitted, time: .shortened))
+                        Text(date.time24)
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -151,7 +151,7 @@ struct DualLineChart: View {
         let tIdx = thermalRaw.lastIndex(where: { $0.0 <= date }).map { thermalRaw[$0] }
         let bIdx = batteryPoints.lastIndex(where: { $0.0 <= date }).map { batteryPoints[$0] }
         return VStack(alignment: .leading, spacing: 3) {
-            Text(date.formatted(date: .omitted, time: .shortened))
+            Text(date.time24)
                 .font(.caption2).foregroundColor(.secondary)
             if let t = tIdx {
                 let label = ThermalStateLevel(rawValue: Int(t.1))?.label ?? "未知"
@@ -252,7 +252,7 @@ struct TripleLineChart: View {
                 AxisTick()
                 AxisValueLabel(anchor: .top) {
                     if let date = value.as(Date.self) {
-                        Text(date.formatted(date: .omitted, time: .shortened))
+                        Text(date.time24)
                             .font(.caption2.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
@@ -261,7 +261,7 @@ struct TripleLineChart: View {
         }
         .chartYAxis { AxisMarks(position: .trailing) }
         .chartLegend(.hidden)
-        .frame(height: 200)
+        .frame(height: 150)
         .chartOverlay { proxy in
             GeometryReader { geo in
                 ZStack(alignment: .topLeading) {
@@ -301,7 +301,7 @@ struct TripleLineChart: View {
         let t = btmpSeries.last(where: { $0.0 <= date })
         let b = battSeries.last(where: { $0.0 <= date })
         return VStack(alignment: .leading, spacing: 3) {
-            Text(date.formatted(date: .omitted, time: .shortened)).font(.caption2).foregroundColor(.secondary)
+            Text(date.time24).font(.caption2).foregroundColor(.secondary)
             if let c { Text("CPU：\(String(format: "%.1f", c.1))°C").font(.caption.bold()).foregroundColor(.red) }
             if let t { Text("电池：\(String(format: "%.1f", t.1))°C").font(.caption.bold()).foregroundColor(.orange) }
             if let b { Text("电量：\(String(format: "%.1f", b.1))%").font(.caption.bold()).foregroundColor(.blue) }
@@ -315,176 +315,21 @@ struct TripleLineChart: View {
     }
 }
 
-// ── Original single-line chart, kept for macOS ─────────────────────────────────
 
-/// A line chart with hover/drag interaction: a crosshair follows the cursor and
-/// a tooltip shows the time and value of the nearest data point. Works on both
-/// macOS (hover) and iOS (drag).
-///
-/// Requires Swift Charts, available on iOS 16.0+ / macOS 13.0+.
-@available(iOS 16.0, macOS 13.0, *)
-struct InteractiveLineChart: View {
-    let title: String
-    let points: [(Date, Double)]
-    let color: Color
-    let scale: ClosedRange<Double>
-    let xDomain: ClosedRange<Date>
-    let valueText: (Double) -> String
+// MARK: - 24-hour time formatter
 
-    @State private var selectedIndex: Int?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.subheadline)
-
-            if points.isEmpty {
-                Text("暂无数据")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, minHeight: 140)
-            } else {
-                chartBody
-            }
-        }
+/// Formats a date as 24-hour "HH:mm" regardless of the user's locale,
+/// so chart axes and tooltips never flip to 12-hour (e.g. 下午3:00).
+extension Date {
+    /// "14:05" style, always 24-hour.
+    var time24: String {
+        Self.time24Formatter.string(from: self)
     }
-
-    // MARK: - Chart
-
-    private var chartBody: some View {
-        Chart {
-            ForEach(Array(points.enumerated()), id: \.offset) { _, point in
-                LineMark(
-                    x: .value("时间", point.0),
-                    y: .value("值", point.1)
-                )
-                .foregroundStyle(color)
-                .lineStyle(StrokeStyle(lineWidth: 2))
-                .interpolationMethod(.catmullRom)
-
-                AreaMark(
-                    x: .value("时间", point.0),
-                    y: .value("值", point.1)
-                )
-                .foregroundStyle(LinearGradient(
-                    colors: [color.opacity(0.2), color.opacity(0.02)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                ))
-                .interpolationMethod(.catmullRom)
-            }
-
-            if let idx = selectedIndex, points.indices.contains(idx) {
-                let point = points[idx]
-                RuleMark(x: .value("时间", point.0))
-                    .foregroundStyle(.gray.opacity(0.35))
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                RuleMark(y: .value("值", point.1))
-                    .foregroundStyle(.gray.opacity(0.35))
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                PointMark(
-                    x: .value("时间", point.0),
-                    y: .value("值", point.1)
-                )
-                .foregroundStyle(color)
-                .symbolSize(70)
-            }
-        }
-        .chartYScale(domain: scale)
-        .chartXScale(domain: xDomain)
-        .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 6)) { value in
-                AxisGridLine()
-                    .foregroundStyle(.gray.opacity(0.2))
-                AxisTick()
-                AxisValueLabel(anchor: .top) {
-                    if let date = value.as(Date.self) {
-                        Text(date.formatted(date: .omitted, time: .shortened))
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        .chartYAxis {
-            AxisMarks(position: .trailing)
-        }
-        .chartLegend(.hidden)
-        .frame(height: 160)
-        .chartOverlay { proxy in
-            GeometryReader { geo in
-                ZStack(alignment: .topLeading) {
-                    // Transparent hit area.
-                    Rectangle()
-                        .fill(.clear)
-                        .contentShape(Rectangle())
-                        #if os(macOS)
-                        .onContinuousHover { phase in
-                            switch phase {
-                            case .active(let location):
-                                updateSelection(at: location, proxy: proxy)
-                            case .ended:
-                                selectedIndex = nil
-                            }
-                        }
-                        #endif
-                        .gesture(
-                            DragGesture(minimumDistance: 0)
-                                .onChanged { value in
-                                    updateSelection(at: value.location, proxy: proxy)
-                                }
-                                .onEnded { _ in
-                                    selectedIndex = nil
-                                }
-                        )
-
-                    if let idx = selectedIndex, points.indices.contains(idx) {
-                        tooltip(for: points[idx])
-                            .position(tooltipPosition(proxy: proxy, geo: geo, point: points[idx]))
-                    }
-                }
-            }
-        }
-    }
-
-    // MARK: - Selection
-
-    private func updateSelection(at location: CGPoint, proxy: ChartProxy) {
-        guard !points.isEmpty else { return }
-        guard let date = proxy.value(atX: location.x, as: Date.self) else { return }
-        let nearest = points.enumerated()
-            .min { abs($0.element.0.timeIntervalSince(date)) < abs($1.element.0.timeIntervalSince(date)) }?
-            .offset
-        selectedIndex = nearest
-    }
-
-    private func tooltipPosition(proxy: ChartProxy, geo: GeometryProxy, point: (Date, Double)) -> CGPoint {
-        let xPos = proxy.position(forX: point.0) ?? geo.size.width / 2
-        let yPos = proxy.position(forY: point.1) ?? geo.size.height / 2
-        let clampedX = min(max(xPos, 90), geo.size.width - 90)
-        let clampedY = min(max(yPos - 34, 18), geo.size.height - 18)
-        return CGPoint(x: clampedX, y: clampedY)
-    }
-
-    private func tooltip(for point: (Date, Double)) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(point.0.formatted(date: .omitted, time: .shortened))
-                .font(.caption2)
-                .foregroundColor(.secondary)
-            Text(valueText(point.1))
-                .font(.caption.bold())
-                .foregroundColor(.primary)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(.thinMaterial)
-                .shadow(color: .black.opacity(0.15), radius: 4, y: 1)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .strokeBorder(.gray.opacity(0.25), lineWidth: 1)
-        )
-    }
+    /// "14:05" style, always 24-hour.
+    static let time24Formatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm"
+        return f
+    }()
 }

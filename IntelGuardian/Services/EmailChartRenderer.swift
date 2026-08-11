@@ -13,33 +13,51 @@ import UIKit
 /// inline SVG and would otherwise leave only the raw coordinate text.
 @MainActor
 enum EmailChartRenderer {
-    static func render(samples: [ThermalSample], series: [(Date, Double)], color: (Double, Double, Double), title: String, yMin: Double, yMax: Double) -> Data? {
+    static func renderMulti(
+        series: [[(Date, Double)]],
+        colors: [(Double, Double, Double)],
+        labels: [String],
+        title: String,
+        yMin: Double,
+        yMax: Double
+    ) -> Data? {
         let width: CGFloat = 640
         let height: CGFloat = 320
         let padLeft: CGFloat = 52
         let padRight: CGFloat = 20
         let padTop: CGFloat = 40
-        let padBottom: CGFloat = 46
+        let padBottom: CGFloat = 54
 
-        // Downsample to at most 12 points so labels stay readable.
-        var pts = series
-        if pts.count > 12 {
-            var sampled: [(Date, Double)] = []
-            let step = Double(pts.count - 1) / 11.0
-            for i in 0..<12 {
-                let idx = Int((Double(i) * step).rounded())
-                sampled.append(pts[min(idx, pts.count - 1)])
+        // Downsample each series to at most 12 points so labels stay readable.
+        let downsampled = series.map { down -> [(Date, Double)] in
+            var pts = down
+            if pts.count > 12 {
+                var sampled: [(Date, Double)] = []
+                let step = Double(pts.count - 1) / 11.0
+                for i in 0..<12 {
+                    let idx = Int((Double(i) * step).rounded())
+                    sampled.append(pts[min(idx, pts.count - 1)])
+                }
+                pts = sampled
             }
-            pts = sampled
+            return pts
         }
-        guard !pts.isEmpty else { return nil }
+        let nonEmpty = downsampled.filter { !$0.isEmpty }
+        guard !nonEmpty.isEmpty else { return nil }
 
         let innerW = width - padLeft - padRight
         let innerH = height - padTop - padBottom
-        let timeRange = max(pts.last!.0.timeIntervalSince(pts.first!.0), 1)
+
+        // Shared X domain across all series.
+        let allDates = nonEmpty.flatMap { $0.map(\.0) }
+        let minDate = allDates.min()!
+        let maxDate = allDates.max()!
+        let timeRange = max(maxDate.timeIntervalSince(minDate), 1)
+
+        // Global Y domain (0…100 scale).
         let valueRange = max(yMax - yMin, 0.0001)
 
-        func px(_ d: Date) -> CGFloat { padLeft + CGFloat(d.timeIntervalSince(pts.first!.0) / timeRange) * innerW }
+        func px(_ d: Date) -> CGFloat { padLeft + CGFloat(d.timeIntervalSince(minDate) / timeRange) * innerW }
         func py(_ v: Double) -> CGFloat { padTop + CGFloat(1 - (v - yMin) / valueRange) * innerH }
 
         let renderBlock: (CGContext) -> Void = { ctx in
@@ -80,7 +98,7 @@ enum EmailChartRenderer {
             for i in 0...4 {
                 let frac = Double(i) / 4
                 let tx = padLeft + innerW * CGFloat(frac)
-                let d = pts.first!.0.addingTimeInterval(timeRange * frac)
+                let d = minDate.addingTimeInterval(timeRange * frac)
                 let label = dateFmt.string(from: d) as NSString
                 let attrs: [NSAttributedString.Key: Any] = [
                     .font: Self.font(size: 10, bold: false),
@@ -90,43 +108,46 @@ enum EmailChartRenderer {
                 label.draw(at: CGPoint(x: tx - size.width / 2, y: padTop + innerH + 10), withAttributes: attrs)
             }
 
-            // Line.
-            let linePath = CGMutablePath()
-            for (i, p) in pts.enumerated() {
-                let point = CGPoint(x: px(p.0), y: py(p.1))
-                if i == 0 { linePath.move(to: point) } else { linePath.addLine(to: point) }
-            }
-            ctx.setStrokeColor(CGColor(red: color.0, green: color.1, blue: color.2, alpha: 1))
-            ctx.setLineWidth(2.5)
-            ctx.setLineJoin(.round)
-            ctx.setLineCap(.round)
-            ctx.addPath(linePath)
-            ctx.strokePath()
-
-            // Points + coordinate labels.
-            for p in pts {
-                let point = CGPoint(x: px(p.0), y: py(p.1))
-                // White fill + colored ring so points read against the line.
-                ctx.setFillColor(CGColor(gray: 1, alpha: 1))
-                ctx.fillEllipse(in: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10))
+            // One line per series.
+            for (idx, pts) in downsampled.enumerated() where !pts.isEmpty {
+                let color = colors[idx]
+                let linePath = CGMutablePath()
+                for (i, p) in pts.enumerated() {
+                    let point = CGPoint(x: px(p.0), y: py(p.1))
+                    if i == 0 { linePath.move(to: point) } else { linePath.addLine(to: point) }
+                }
                 ctx.setStrokeColor(CGColor(red: color.0, green: color.1, blue: color.2, alpha: 1))
-                ctx.setLineWidth(2)
-                ctx.strokeEllipse(in: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10))
+                ctx.setLineWidth(2.5)
+                ctx.setLineJoin(.round)
+                ctx.setLineCap(.round)
+                ctx.addPath(linePath)
+                ctx.strokePath()
 
-                let label = "\(dateFmt.string(from: p.0))  \(String(format: "%.1f", p.1))" as NSString
+                // Points.
+                for p in pts {
+                    let point = CGPoint(x: px(p.0), y: py(p.1))
+                    ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+                    ctx.fillEllipse(in: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8))
+                    ctx.setStrokeColor(CGColor(red: color.0, green: color.1, blue: color.2, alpha: 1))
+                    ctx.setLineWidth(1.8)
+                    ctx.strokeEllipse(in: CGRect(x: point.x - 4, y: point.y - 4, width: 8, height: 8))
+                }
+            }
+
+            // Legend row at the bottom.
+            var legendX: CGFloat = padLeft
+            for (idx, label) in labels.enumerated() where !downsampled[idx].isEmpty {
+                let color = colors[idx]
+                ctx.setFillColor(CGColor(red: color.0, green: color.1, blue: color.2, alpha: 1))
+                ctx.fillEllipse(in: CGRect(x: legendX, y: height - 24, width: 8, height: 8))
+                let text = label as NSString
                 let attrs: [NSAttributedString.Key: Any] = [
-                    .font: Self.font(size: 10, bold: true),
-                    .foregroundColor: Self.color(0.15, 0.15, 0.18, 1),
+                    .font: Self.font(size: 10, bold: false),
+                    .foregroundColor: Self.color(0.3, 0.3, 0.33, 1),
                 ]
-                let size = label.size(withAttributes: attrs)
-                var lx = point.x - size.width / 2
-                lx = min(max(lx, padLeft), width - padRight - size.width)
-                var ly = point.y - size.height - 6
-                ly = max(ly, padTop - 2)
-                // Small white backing so labels stay readable over the line.
-                ctx.setFillColor(CGColor(gray: 1, alpha: 0.75))
-                ctx.fill(CGRect(x: lx - 2, y: ly - 1, width: size.width + 4, height: size.height + 2))
-                label.draw(at: CGPoint(x: lx, y: ly), withAttributes: attrs)
+                let size = text.size(withAttributes: attrs)
+                text.draw(at: CGPoint(x: legendX + 12, y: height - 27), withAttributes: attrs)
+                legendX += 12 + size.width + 24
             }
         }
 

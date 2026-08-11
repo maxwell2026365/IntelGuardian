@@ -3,9 +3,6 @@ import SwiftUI
 private extension Color {
     static var cardBackground: Color {
         #if os(macOS)
-        if #available(macOS 10.14, *) {
-            return Color(nsColor: .controlBackgroundColor)
-        }
         return Color(nsColor: .controlBackgroundColor)
         #else
         return Color(uiColor: .secondarySystemBackground)
@@ -15,7 +12,6 @@ private extension Color {
 
 struct DashboardView: View {
     @ObservedObject var monitor: MonitorService
-    @ObservedObject var settings: AppSettings
 
     private var recent: [ThermalSample] {
         monitor.store.recentSamples(hours: 2)
@@ -27,9 +23,21 @@ struct DashboardView: View {
                 titleRow
                 statusCard
                 currentMetricsGrid
+                uptimeCard
                 chartsCard
+                #if os(macOS)
+                if !monitor.topProcesses.isEmpty {
+                    cpuRankingCard
+                }
+                #endif
             }
             .padding()
+        }
+        #if os(iOS)
+        .background(Color.black.ignoresSafeArea())
+        #endif
+        .onAppear {
+            monitor.refreshNow()
         }
     }
 
@@ -192,6 +200,42 @@ struct DashboardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
+    // MARK: - System uptime
+
+    private var uptimeCard: some View {
+        VStack(spacing: 6) {
+            Label("系统启动", systemImage: "power")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if let bootDate = SystemInfo.bootDate {
+                Text(bootDate.formatted(date: .abbreviated, time: .standard))
+                    .font(.subheadline.bold())
+                    .foregroundColor(.primary)
+                Text("已运行 \(uptimeText(from: bootDate))")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            } else {
+                Text("暂不可用")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 12)
+        .background(Color.cardBackground.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func uptimeText(from bootDate: Date) -> String {
+        let seconds = max(0, Int(Date().timeIntervalSince(bootDate)))
+        let days = seconds / 86_400
+        let hours = (seconds % 86_400) / 3_600
+        let minutes = (seconds % 3_600) / 60
+        if days > 0 { return "\(days) 天 \(hours) 小时 \(minutes) 分钟" }
+        if hours > 0 { return "\(hours) 小时 \(minutes) 分钟" }
+        return "\(max(1, minutes)) 分钟"
+    }
+
     private func valueText(_ value: Double?, unit: String) -> String {
         guard let value else { return "N/A" }
         return String(format: "%.1f%@", value, unit)
@@ -199,7 +243,8 @@ struct DashboardView: View {
 
     private func levelText(_ level: Double) -> String {
         guard level >= 0 else { return "N/A" }
-        return String(format: "%.1f%%", level * 100)
+        // Integer percentage to match the status-bar style (e.g. "62%").
+        return String(format: "%.0f%%", level * 100)
     }
 
     // MARK: - Charts
@@ -300,4 +345,130 @@ struct DashboardView: View {
     private var xDomain: ClosedRange<Date> {
         Date().addingTimeInterval(-3 * 3600)...Date()
     }
+
+    // MARK: - CPU usage ranking
+
+    #if os(macOS)
+    private var cpuRankingCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("CPU 发热 Top")
+                    .font(.headline)
+                Spacer()
+                Text("当前使用率 · 近 2 小时累计")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
+            rankingHeader
+            Divider()
+            ForEach(Array(monitor.topProcesses.enumerated()), id: \.element.id) { index, process in
+                rankingRow(rank: index + 1, process: process)
+            }
+        }
+        .padding()
+        .background(Color.cardBackground.opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var rankingHeader: some View {
+        HStack(spacing: 10) {
+            columnText("名次", width: 32, align: .trailing, header: true)
+            columnText("进程", width: nil, align: .leading, header: true)
+            columnText("PID", width: 52, align: .trailing, header: true)
+            columnText("PPID", width: 56, align: .trailing, header: true)
+            columnText("启动时间", width: 58, align: .trailing, header: true)
+            columnText("已运行", width: 64, align: .trailing, header: true)
+            columnText("CPU 使用率", width: 72, align: .trailing, header: true)
+            columnText("CPU 累计", width: 72, align: .trailing, header: true)
+        }
+        .font(.caption2)
+        .foregroundColor(.secondary)
+        .padding(.bottom, 2)
+    }
+
+    private func rankingRow(rank: Int, process: ProcessUsage) -> some View {
+        HStack(spacing: 10) {
+            Text("\(rank)")
+                .font(.subheadline.monospacedDigit().bold())
+                .foregroundColor(rank <= 3 ? Color.red.opacity(0.8) : Color.secondary)
+                .frame(width: 32, alignment: .trailing)
+
+            Text(process.name)
+                .font(.subheadline)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            columnText("\(process.pid)", width: 52, align: .trailing)
+            columnText(process.ppid > 0 ? "\(process.ppid)" : "—", width: 56, align: .trailing)
+            columnText(startTimeText(process.startDate), width: 58, align: .trailing)
+            columnText(runtimeText(process.runtimeSeconds), width: 64, align: .trailing)
+            columnText(percentText(process.cpuUsagePercent), width: 72, align: .trailing, color: usageColor(process.cpuUsagePercent))
+            columnText(timeText(process.cpuSeconds), width: 72, align: .trailing, color: percentColor(process.cpuSeconds))
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func columnText(_ text: String, width: CGFloat?, align: Alignment, color: Color = .secondary, header: Bool = false) -> some View {
+        let base = Text(text)
+            .font(header ? .caption2 : .subheadline)
+            .foregroundColor(color)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
+        if let width {
+            return AnyView(base.frame(width: width, alignment: align))
+        }
+        return AnyView(base.frame(maxWidth: .infinity, alignment: align))
+    }
+
+    private func startTimeText(_ date: Date) -> String {
+        guard date != .distantPast else { return "—" }
+        return date.formatted(date: .omitted, time: .shortened)
+    }
+
+    private func runtimeText(_ seconds: TimeInterval) -> String {
+        let total = Int(seconds)
+        if total >= 24 * 3600 {
+            let d = total / (24 * 3600), h = (total % (24 * 3600)) / 3600
+            return d > 0 ? String(format: "%d 天 %d 时", d, h) : String(format: "%d 时", h)
+        }
+        if total >= 3600 {
+            let h = total / 3600, m = (total % 3600) / 60
+            return m > 0 ? String(format: "%d 时 %d 分", h, m) : String(format: "%d 时", h)
+        }
+        let m = total / 60
+        return m > 0 ? String(format: "%d 分", m) : "\(total) 秒"
+    }
+
+    private func timeText(_ seconds: UInt64) -> String {
+        let minutes = seconds / 60
+        if minutes >= 60 {
+            let h = minutes / 60, m = minutes % 60
+            return m > 0 ? String(format: "%d 小时 %d 分", h, m) : String(format: "%d 小时", h)
+        }
+        return String(format: "%d 分", minutes)
+    }
+
+    private func percentText(_ percent: Double) -> String {
+        guard percent > 0 else { return "—" }
+        return String(format: "%.0f%%", percent)
+    }
+
+    private func usageColor(_ percent: Double) -> Color {
+        switch percent {
+        case 80...: return .red            // pegged core(s)
+        case 50..<80: return .orange       // heavy
+        default: return .secondary
+        }
+    }
+
+    private func percentColor(_ seconds: UInt64) -> Color {
+        switch seconds {
+        case 3600...: return .red            // ≥ 1 hour of CPU time
+        case 900..<3600: return .orange      // ≥ 15 minutes
+        default: return .secondary
+        }
+    }
+    #endif
 }

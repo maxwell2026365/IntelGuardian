@@ -1,1 +1,56 @@
+# ── Xcode / Swift ────────────────────────────────────────────────────────────
+# Derived data & build artifacts
 .build/
+DerivedData/
+build/
+
+# Xcode user state (per-developer, not shared)
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.xcbuilddata
+*.xcconfig.bak
+
+# Swift Package Manager
+.swiftpm/
+Package.resolved
+
+# ── System / editor ──────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+*.swp
+*.tmp
+*~
+.idea/
+.vscode/
+
+# ── Build outputs & debug artifacts ──────────────────────────────────────────
+*.o
+*.a
+*.dylib
+*.dSYM
+*.ipa
+*.app
+*.app.dSYM
+*.swiftmodule
+*.swiftdoc
+*.swiftsourceinfo
+*.hmap
+*.dia
+*.pch
+*.modulemap
+
+# ── Test artifacts ───────────────────────────────────────────────────────────
+TestResults/
+xcresult/
+*.xctest
+
+# ── Logs & misc ──────────────────────────────────────────────────────────────
+*.log
+*.txt~
+*.pyc

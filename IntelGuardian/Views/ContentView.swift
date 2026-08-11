@@ -15,6 +15,10 @@ struct ContentView: View {
         .task {
             ensureMonitor()
         }
+        #if os(iOS)
+        .preferredColorScheme(.dark)
+        .background(Color.black.ignoresSafeArea())
+        #endif
     }
 
     private func ensureMonitor() {
@@ -27,7 +31,7 @@ struct ContentView: View {
     private var modernTabs: some View {
         TabView {
             NavigationStack {
-                DashboardView(monitor: monitor, settings: settings)
+                DashboardView(monitor: monitor)
             }
             .tabItem {
                 Label("概览", systemImage: "gauge")
@@ -48,7 +52,7 @@ struct ContentView: View {
     private var legacyTabs: some View {
         TabView {
             NavigationView {
-                DashboardView(monitor: monitor, settings: settings)
+                DashboardView(monitor: monitor)
             }
             .tabItem {
                 Image(systemName: "gauge")

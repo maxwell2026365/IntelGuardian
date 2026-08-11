@@ -53,6 +53,9 @@ final class SampleStore: ObservableObject {
     @Published var samples: [ThermalSample] = []
 
     private let fileURL: URL
+    /// Coalesces frequent writes (e.g. 30s timer samples) into one disk write,
+    /// so the main thread never blocks on a full re-encode per insert.
+    private var pendingSaveWork: DispatchWorkItem?
 
     init() {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
@@ -66,20 +69,40 @@ final class SampleStore: ObservableObject {
         samples = decoded.sorted { $0.timestamp > $1.timestamp }
     }
 
-    private func save() {
+    private func saveNow() {
+        pendingSaveWork?.cancel()
+        pendingSaveWork = nil
         guard let data = try? JSONEncoder().encode(samples) else { return }
         try? data.write(to: fileURL, options: .atomic)
+    }
+
+    /// Schedules a disk write shortly after the last mutation. Writes that land
+    /// within the window are coalesced into a single save.
+    private func scheduleSave() {
+        pendingSaveWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.saveNow()
+            }
+        }
+        pendingSaveWork = work
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 1.0, execute: work)
     }
 
     func insert(_ sample: ThermalSample) {
         samples.insert(sample, at: 0)
         prune()
-        save()
+        scheduleSave()
     }
 
     func delete(_ sample: ThermalSample) {
         samples.removeAll { $0.id == sample.id }
-        save()
+        scheduleSave()
+    }
+
+    /// Flushes any pending write immediately. Call on app termination.
+    func flush() {
+        saveNow()
     }
 
     /// Keeps the last 7 days of samples.

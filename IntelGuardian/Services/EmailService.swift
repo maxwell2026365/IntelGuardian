@@ -139,17 +139,12 @@ final class EmailService {
         let latest = samples.last
         let cpuText = latest?.cpuTemp.map { String(format: "%.1f", $0) } ?? "N/A"
         let batteryTempText = latest?.batteryTemp.map { String(format: "%.1f", $0) } ?? "N/A"
-        let levelText = latest.map { String(format: "%.1f%%", $0.batteryLevel * 100) } ?? "N/A"
+        let levelText = latest.map { String(format: "%.0f%%", $0.batteryLevel * 100) } ?? "N/A"
         let thermalText = latest?.thermalState?.label ?? "N/A"
 
         let deviceType = Self.deviceTypeName()
         let deviceUser = Self.deviceUserName()
-        let chargingText: String
-        if let charging = latest?.batteryLevel, charging >= 0 {
-            chargingText = Self.isChargingText()
-        } else {
-            chargingText = "未知"
-        }
+        let chargingText = Self.isChargingText()
 
         #if os(iOS)
         // iOS has no CPU/battery temperature API; show thermal state + level only.
@@ -199,7 +194,7 @@ final class EmailService {
         parts.append(header)
 
         let sender = settings.smtpSender.isEmpty ? settings.smtpUser : settings.smtpSender
-        let subject = reason.subject
+        let subject = "\(reason.subject)｜\(deviceType)｜\(deviceUser)"
 
         var message = Data()
         message.append(Data("From: \(Self.encodeHeader(sender)) <\(settings.smtpUser)>\r\n".utf8))
@@ -233,127 +228,131 @@ final class EmailService {
         let padTop = 22.0
         let padBottom = 34.0
 
-        func chart(for title: String, series: [(Date, Double)], colorHex: String, rgb: (Double, Double, Double), yMin: Double, yMax: Double) -> String {
-            guard !series.isEmpty else { return "" }
+        /// Merges several series (each with its own full-scale `yMax`) onto one
+        /// shared 0…100 Y axis. Tooltips show the real values.
+        func multiChart(
+            title: String,
+            series: [(name: String, points: [(Date, Double)], colorHex: String, rgb: (Double, Double, Double), yMax: Double)]
+        ) -> String {
+            let live = series.filter { !$0.points.isEmpty }
+            guard !live.isEmpty else { return "" }
             let innerW = chartWidth - padLeft - padRight
             let innerH = chartHeight - padTop - padBottom
             let cls = "c\(chartCounter)"
             chartCounter += 1
 
-            // Downsample to at most 20 points evenly spread.
-            var pts = series
-            if pts.count > 20 {
-                var sampled: [(Date, Double)] = []
-                let step = Double(pts.count - 1) / 19.0
-                for i in 0..<20 {
+            // Shared X domain across all series.
+            let allDates = live.flatMap { $0.points.map(\.0) }
+            let minDate = allDates.min()!
+            let maxDate = allDates.max()!
+            let timeRange = max(maxDate.timeIntervalSince(minDate), 1)
+
+            func x(_ d: Date) -> Double { padLeft + (d.timeIntervalSince(minDate) / timeRange) * innerW }
+            // Normalise each value to the shared 0…100 axis.
+            func yn(_ v: Double, yMax: Double) -> Double { padTop + (1 - (v / max(yMax, 0.0001))) * innerH }
+
+            // Downsample helper.
+            func downsample(_ pts: [(Date, Double)], to n: Int) -> [(Date, Double)] {
+                guard pts.count > n else { return pts }
+                var out: [(Date, Double)] = []
+                let step = Double(pts.count - 1) / Double(n - 1)
+                for i in 0..<n {
                     let idx = Int((Double(i) * step).rounded())
-                    sampled.append(pts[min(idx, pts.count - 1)])
+                    out.append(pts[min(idx, pts.count - 1)])
                 }
-                pts = sampled
+                return out
             }
+            let sampled = live.map { s in (name: s.name, pts: downsample(s.points, to: 20), colorHex: s.colorHex, rgb: s.rgb, yMax: s.yMax) }
 
-            let timeRange = max(pts.last!.0.timeIntervalSince(pts.first!.0), 1)
-            let valueRange = max(yMax - yMin, 0.0001)
-
-            func x(_ d: Date) -> Double { padLeft + (d.timeIntervalSince(pts.first!.0) / timeRange) * innerW }
-            func y(_ v: Double) -> Double { padTop + (1 - (v - yMin) / valueRange) * innerH }
-
-            // Smooth path (Catmull-Rom to Bezier) for the line.
-            let path = Self.smoothPath(pts, x: x, y: y)
-
-            // Area fill under the line.
-            let areaPath = path + " L\(String(format: "%.1f", x(pts.last!.0))),\(padTop + innerH) L\(String(format: "%.1f", x(pts.first!.0))),\(padTop + innerH) Z"
-
-            // Light horizontal grid lines + y tick labels.
+            // Grid + y labels (0…100).
             var grid = ""
             for i in 1...4 {
                 let gy = padTop + innerH * Double(i) / 4
-                let val = yMax - (yMax - yMin) * Double(i) / 4
+                let val = 100 - 100 * Double(i) / 4
                 grid += "<line x1='\(padLeft)' y1='\(String(format: "%.1f", gy))' x2='\(chartWidth - padRight)' y2='\(String(format: "%.1f", gy))' stroke='#f0f0f0' stroke-width='1'/>"
                 grid += "<text x='\(padLeft - 8)' y='\(String(format: "%.1f", gy + 3.5))' text-anchor='end' font-size='10' fill='#b0b0b0'>\(String(format: "%.0f", val))</text>"
             }
 
-            // X-axis time ticks.
+            // X ticks.
             var xTicks = ""
             let tickCount = 5
             for i in 0...tickCount {
                 let frac = Double(i) / Double(tickCount)
-                let tickDate = pts.first!.0.addingTimeInterval(timeRange * frac)
-                let tx = padLeft + innerW * frac
-                let label = Self.timeFormatter.string(from: tickDate)
-                xTicks += "<text x='\(String(format: "%.1f", tx))' y='\(padTop + innerH + 18)' text-anchor='middle' font-size='10' fill='#b0b0b0'>\(label)</text>"
+                let tickDate = minDate.addingTimeInterval(timeRange * frac)
+                xTicks += "<text x='\(String(format: "%.1f", padLeft + innerW * frac))' y='\(padTop + innerH + 18)' text-anchor='middle' font-size='10' fill='#b0b0b0'>\(Self.timeFormatter.string(from: tickDate))</text>"
             }
 
             let baseline = "<line x1='\(padLeft)' y1='\(padTop + innerH)' x2='\(chartWidth - padRight)' y2='\(padTop + innerH)' stroke='#e2e2e2' stroke-width='1'/>"
 
-            // Each point = hot-zone group: big transparent circle for hover,
-            // visible dot, and a hidden tooltip that appears on hover.
+            // Legend.
+            var legend = ""
+            var lx = padLeft
+            for s in sampled {
+                let w = Double(s.name.count * 7 + 14)
+                legend += "<circle cx='\(String(format: "%.1f", lx + 4))' cy='\(padTop - 10)' r='4' fill='\(s.colorHex)'/>"
+                legend += "<text x='\(String(format: "%.1f", lx + 12))' y='\(padTop - 6)' font-size='10' fill='#666'>\(s.name)</text>"
+                lx += w
+            }
+
+            // Lines + hover dots per series.
+            var paths = ""
             var dots = ""
-            for (i, p) in pts.enumerated() {
-                let cx = String(format: "%.1f", x(p.0))
-                let cy = String(format: "%.1f", y(p.1))
-                let timeLabel = Self.timeFormatter.string(from: p.0)
-                let valLabel = String(format: "%.1f", p.1)
-                let tooltip = "\(timeLabel)  \(valLabel)"
+            var css = ""
+            for (si, s) in sampled.enumerated() {
+                let path = Self.smoothPath(s.pts.map { ($0.0, $0.1) }, x: x, y: { yn($0, yMax: s.yMax) })
+                paths += "<path d='\(path)' fill='none' stroke='\(s.colorHex)' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/>"
 
-                let visible = i == pts.count - 1
-                let r = visible ? "5" : "3"
-                let strokeW = visible ? "2.5" : "2"
-
-                // Clamp tooltip position so it stays inside the SVG.
-                let tipX = min(max(Double(cx)!, 46), chartWidth - 46)
-                let tipY = max(Double(cy)! - 14, 12)
-                let tipW = 92.0
-                let tipH = 22.0
-
-                dots += """
-                <g class="dp-\(cls)" style="cursor:pointer;">
-                  <circle cx="\(cx)" cy="\(cy)" r="13" fill="transparent"/>
-                  <circle cx="\(cx)" cy="\(cy)" r="\(r)" fill="\(visible ? colorHex : "#ffffff")" stroke="\(colorHex)" stroke-width="\(strokeW)">
-                    <title>\(tooltip)</title>
-                  </circle>
-                  <g class="tip-\(cls)">
-                    <rect x="\(String(format: "%.1f", tipX - tipW / 2))" y="\(String(format: "%.1f", tipY - tipH / 2))" width="\(tipW)" height="\(tipH)" rx="5" fill="#333"/>
-                    <text x="\(String(format: "%.1f", tipX))" y="\(String(format: "%.1f", tipY + 1))" text-anchor="middle" font-size="10.5" font-weight="600" fill="#fff">\(timeLabel)  \(valLabel)</text>
-                  </g>
-                </g>
-                """
+                let pcls = "\(cls)-\(si)"
+                css += ".dp-\(pcls) .tip-\(pcls){opacity:0;} .dp-\(pcls):hover .tip-\(pcls){opacity:1;} "
+                for (i, p) in s.pts.enumerated() {
+                    let cx = String(format: "%.1f", x(p.0))
+                    let cy = String(format: "%.1f", yn(p.1, yMax: s.yMax))
+                    let timeLabel = Self.timeFormatter.string(from: p.0)
+                    let visible = i == s.pts.count - 1
+                    let r = visible ? "5" : "3"
+                    let tipX = min(max(Double(cx)!, 60), chartWidth - 60)
+                    let tipY = max(Double(cy)! - 14, 12)
+                    dots += """
+                    <g class="dp-\(pcls)" style="cursor:pointer;">
+                      <circle cx="\(cx)" cy="\(cy)" r="13" fill="transparent"/>
+                      <circle cx="\(cx)" cy="\(cy)" r="\(r)" fill="\(visible ? s.colorHex : "#ffffff")" stroke="\(s.colorHex)" stroke-width="2">
+                        <title>\(timeLabel)  \(s.name)  \(String(format: "%.1f", p.1))</title>
+                      </circle>
+                      <g class="tip-\(pcls)">
+                        <rect x="\(String(format: "%.1f", tipX - 46))" y="\(String(format: "%.1f", tipY - 11))" width="92" height="22" rx="5" fill="#333"/>
+                        <text x="\(String(format: "%.1f", tipX))" y="\(String(format: "%.1f", tipY + 1))" text-anchor="middle" font-size="10.5" font-weight="600" fill="#fff">\(timeLabel)  \(s.name) \(String(format: "%.1f", p.1))</text>
+                      </g>
+                    </g>
+                    """
+                }
             }
 
             let svg = """
             <svg width="\(Int(chartWidth))" height="\(Int(chartHeight))" viewBox="0 0 \(chartWidth) \(chartHeight)" xmlns="http://www.w3.org/2000/svg" style="position:absolute; top:0; left:0; width:100%; height:100%; background:#ffffff;">
-              <defs>
-                <linearGradient id="fill-\(colorHex.hashValue & 0x7fffffff)" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="\(colorHex)" stop-opacity="0.16"/>
-                  <stop offset="100%" stop-color="\(colorHex)" stop-opacity="0.0"/>
-                </linearGradient>
-              </defs>
+              <style>\(css)</style>
+              \(legend)
               \(grid)
               \(baseline)
-              <path d="\(areaPath)" fill="url(#fill-\(colorHex.hashValue & 0x7fffffff))"/>
-              <path d="\(path)" fill="none" stroke="\(colorHex)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+              \(paths)
               \(dots)
               \(xTicks)
             </svg>
             """
 
-            // PNG fallback so clients that strip SVG (Gmail) still see the chart.
-            let pngData = EmailChartRenderer.render(
-                samples: samples,
-                series: series,
-                color: rgb,
+            // PNG fallback — one combined chart.
+            let pngData = EmailChartRenderer.renderMulti(
+                series: sampled.map { s in s.pts.map { ($0.0, $0.1) } },
+                colors: sampled.map { $0.rgb },
+                labels: sampled.map { $0.name },
                 title: title,
-                yMin: yMin,
-                yMax: yMax
+                yMin: 0,
+                yMax: 100
             )
             let pngB64 = pngData?.base64EncodedString() ?? ""
 
             return """
             <div style="margin:14px 0; background:#ffffff; border:1px solid #ececec; border-radius:10px; padding:14px 8px 10px 8px;">
-              <style>
-                .dp-\(cls) .tip-\(cls) { opacity: 0; }
-                .dp-\(cls):hover .tip-\(cls) { opacity: 1; }
-              </style>
+              <style>.dp-\(cls) .tip-\(cls) { opacity: 0; } .dp-\(cls):hover .tip-\(cls) { opacity: 1; }</style>
               <div style="font-size:13px; font-weight:600; color:#333; margin:0 6px 8px 6px;">\(title)</div>
               <div style="position:relative;">
                 <img src="data:image/png;base64,\(pngB64)" width="\(Int(chartWidth))" height="\(Int(chartHeight))" alt="\(title)" style="display:block; width:100%; height:auto; max-width:\(Int(chartWidth))px; border:0;"/>
@@ -365,36 +364,35 @@ final class EmailService {
 
         var result = ""
         #if os(iOS)
-        result += chart(
-            for: "热状态（0 正常 · 1 轻微 · 2 严重 · 3 临界）",
-            series: samples.compactMap { s in s.thermalStateRaw.map { (s.timestamp, Double($0)) } },
-            colorHex: "#ff9500",
-            rgb: (1.0, 0.58, 0.0),
-            yMin: 0, yMax: 3
+        // Combine thermal state (0…3) and battery level (0…100%) into one chart;
+        // each series is normalised onto the shared axis using its own full scale.
+        result += multiChart(
+            title: "热状态与电量趋势",
+            series: [
+                (name: "热状态(0-3)",
+                 points: samples.compactMap { s in s.thermalStateRaw.map { (s.timestamp, Double($0)) } },
+                 colorHex: "#ff9500", rgb: (1.0, 0.58, 0.0), yMax: 3),
+                (name: "电量(%)",
+                 points: samples.map { ($0.timestamp, $0.batteryLevel * 100) },
+                 colorHex: "#007aff", rgb: (0.0, 0.48, 1.0), yMax: 100),
+            ]
         )
         #else
-        result += chart(
-            for: "CPU 温度 (°C)",
-            series: samples.compactMap { s in s.cpuTemp.map { (s.timestamp, $0) } },
-            colorHex: "#ff3b30",
-            rgb: (1.0, 0.23, 0.19),
-            yMin: 0, yMax: 120
-        )
-        result += chart(
-            for: "电池温度 (°C)",
-            series: samples.compactMap { s in s.batteryTemp.map { (s.timestamp, $0) } },
-            colorHex: "#ff9500",
-            rgb: (1.0, 0.58, 0.0),
-            yMin: 0, yMax: 80
+        result += multiChart(
+            title: "温度与电量趋势",
+            series: [
+                (name: "CPU 温度(°C)",
+                 points: samples.compactMap { s in s.cpuTemp.map { (s.timestamp, $0) } },
+                 colorHex: "#ff3b30", rgb: (1.0, 0.23, 0.19), yMax: 120),
+                (name: "电池温度(°C)",
+                 points: samples.compactMap { s in s.batteryTemp.map { (s.timestamp, $0) } },
+                 colorHex: "#ff9500", rgb: (1.0, 0.58, 0.0), yMax: 80),
+                (name: "电量(%)",
+                 points: samples.map { ($0.timestamp, $0.batteryLevel * 100) },
+                 colorHex: "#007aff", rgb: (0.0, 0.48, 1.0), yMax: 100),
+            ]
         )
         #endif
-        result += chart(
-            for: "电量 (%)",
-            series: samples.map { ($0.timestamp, $0.batteryLevel * 100) },
-            colorHex: "#007aff",
-            rgb: (0.0, 0.48, 1.0),
-            yMin: 0, yMax: 100
-        )
         return result
     }
 
