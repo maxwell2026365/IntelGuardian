@@ -239,7 +239,7 @@ final class MonitorService: ObservableObject {
 
             if settings.notifyCharge80,
                charging == true,
-               level >= 0.80,
+               level > 0.80,
                level < 0.999 {
                 chargeReason = .chargeHigh(level * 100)
             } else if settings.notifyCharge20,
