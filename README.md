@@ -14,7 +14,7 @@ macOS dashboard — real-time CPU & battery temperature, charge level, and a 2-h
 
 macOS settings — SMTP email alerts, thresholds, and monitoring toggles.
 
-![IntelGuardian macOS settings](doc/images/dashboard-full-settings.png)
+![IntelGuardian macOS settings](doc/images/dashboard-full-settings-1.0.png)
 
 ---
 

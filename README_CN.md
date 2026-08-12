@@ -14,7 +14,7 @@ macOS 概览页 —— 实时 CPU / 电池温度、电量，以及近 2 小时�
 
 macOS 设置页 —— SMTP 邮件提醒、告警阈值与监测开关。
 
-![IntelGuardian macOS 设置页](doc/images/dashboard-full-settings.png)
+![IntelGuardian macOS 设置页](doc/images/dashboard-full-settings-1.0.png)
 
 ---
 
