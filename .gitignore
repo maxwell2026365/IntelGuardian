@@ -1,4 +1,7 @@
 # ── Xcode / Swift ────────────────────────────────────────────────────────────
+# Project file (kept local — not shared via git)
+IntelGuardian.xcodeproj/
+
 # Derived data & build artifacts
 .build/
 DerivedData/

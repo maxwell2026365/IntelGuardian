@@ -13,6 +13,15 @@ private extension Color {
 struct DashboardView: View {
     @ObservedObject var monitor: MonitorService
 
+    #if os(macOS)
+    /// Sort key for the CPU ranking table. Defaults to accumulated CPU time.
+    private enum RankSortKey: Hashable {
+        case name, pid, ppid, startDate, runtime, usagePercent, cpuSeconds
+    }
+    @State private var sortKey: RankSortKey = .cpuSeconds
+    @State private var sortAscending = false
+    #endif
+
     private var recent: [ThermalSample] {
         monitor.store.recentSamples(hours: 2)
     }
@@ -349,20 +358,36 @@ struct DashboardView: View {
     // MARK: - CPU usage ranking
 
     #if os(macOS)
+    private var sortedProcesses: [ProcessUsage] {
+        let list = monitor.topProcesses
+        let sorted = list.sorted { a, b in
+            switch sortKey {
+            case .name: return a.name < b.name
+            case .pid: return a.pid < b.pid
+            case .ppid: return a.ppid < b.ppid
+            case .startDate: return a.startDate < b.startDate
+            case .runtime: return a.runtimeSeconds < b.runtimeSeconds
+            case .usagePercent: return a.cpuUsagePercent < b.cpuUsagePercent
+            case .cpuSeconds: return a.cpuSeconds < b.cpuSeconds
+            }
+        }
+        return sortAscending ? sorted : sorted.reversed()
+    }
+
     private var cpuRankingCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
                 Text("CPU 发热 Top")
                     .font(.headline)
                 Spacer()
-                Text("当前使用率 · 近 2 小时累计")
+                Text("点击列表头排序")
                     .font(.caption)
                     .foregroundColor(.secondary)
             }
 
             rankingHeader
             Divider()
-            ForEach(Array(monitor.topProcesses.enumerated()), id: \.element.id) { index, process in
+            ForEach(Array(sortedProcesses.enumerated()), id: \.element.id) { index, process in
                 rankingRow(rank: index + 1, process: process)
             }
         }
@@ -371,16 +396,41 @@ struct DashboardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
+    private func sortBy(_ key: RankSortKey) {
+        if sortKey == key {
+            sortAscending.toggle()
+        } else {
+            sortKey = key
+            sortAscending = false
+        }
+    }
+
+    private func sortedHeader(_ title: String, width: CGFloat?, align: Alignment, key: RankSortKey) -> some View {
+        Button {
+            sortBy(key)
+        } label: {
+            HStack(spacing: 3) {
+                columnText(title, width: width, align: align, header: true)
+                if sortKey == key {
+                    Image(systemName: sortAscending ? "arrow.up" : "arrow.down")
+                        .font(.system(size: 8, weight: .semibold))
+                        .foregroundColor(.secondary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
     private var rankingHeader: some View {
         HStack(spacing: 10) {
             columnText("名次", width: 32, align: .trailing, header: true)
-            columnText("进程", width: nil, align: .leading, header: true)
-            columnText("PID", width: 52, align: .trailing, header: true)
-            columnText("PPID", width: 56, align: .trailing, header: true)
-            columnText("启动时间", width: 58, align: .trailing, header: true)
-            columnText("已运行", width: 64, align: .trailing, header: true)
-            columnText("CPU 使用率", width: 72, align: .trailing, header: true)
-            columnText("CPU 累计", width: 72, align: .trailing, header: true)
+            sortedHeader("进程", width: nil, align: .leading, key: .name)
+            sortedHeader("PID", width: 52, align: .trailing, key: .pid)
+            sortedHeader("PPID", width: 56, align: .trailing, key: .ppid)
+            sortedHeader("启动时间", width: 58, align: .trailing, key: .startDate)
+            sortedHeader("已运行", width: 64, align: .trailing, key: .runtime)
+            sortedHeader("CPU 使用率", width: 72, align: .trailing, key: .usagePercent)
+            sortedHeader("CPU 累计", width: 72, align: .trailing, key: .cpuSeconds)
         }
         .font(.caption2)
         .foregroundColor(.secondary)

@@ -43,6 +43,18 @@ struct SettingsView: View {
                             }
                         )
                     )
+                    #if os(macOS)
+                    Divider()
+                    toggleRow(
+                        title: "窗口置顶",
+                        icon: "pin.fill",
+                        tint: .purple,
+                        isOn: Binding(
+                            get: { settings.windowOnTop },
+                            set: { settings.windowOnTop = $0 }
+                        )
+                    )
+                    #endif
                 }
 
                 SettingsCard(title: "邮件提醒（SMTP）", icon: "envelope.fill", tint: .orange) {

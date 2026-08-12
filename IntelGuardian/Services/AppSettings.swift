@@ -20,6 +20,7 @@ final class AppSettings: ObservableObject {
         static let notifyCharge80 = "notifyCharge80"
         static let notifyCharge20 = "notifyCharge20"
         static let monitoringEnabled = "monitoringEnabled"
+        static let windowOnTop = "windowOnTop"
     }
 
     private let defaults: UserDefaults
@@ -64,6 +65,11 @@ final class AppSettings: ObservableObject {
     @Published var monitoringEnabled: Bool {
         didSet { defaults.set(monitoringEnabled, forKey: Keys.monitoringEnabled) }
     }
+    /// Whether the macOS window floats above other windows ("always on top").
+    /// Only meaningful on macOS; ignored on iOS.
+    @Published var windowOnTop: Bool {
+        didSet { defaults.set(windowOnTop, forKey: Keys.windowOnTop) }
+    }
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -82,6 +88,7 @@ final class AppSettings: ObservableObject {
         notifyCharge80 = defaults.object(forKey: Keys.notifyCharge80) as? Bool ?? true
         notifyCharge20 = defaults.object(forKey: Keys.notifyCharge20) as? Bool ?? true
         monitoringEnabled = defaults.object(forKey: Keys.monitoringEnabled) as? Bool ?? true
+        windowOnTop = defaults.object(forKey: Keys.windowOnTop) as? Bool ?? false
     }
 
     var thermalStateThreshold: ThermalStateLevel {
