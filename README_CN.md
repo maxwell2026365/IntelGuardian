@@ -6,6 +6,18 @@
 
 ---
 
+## 界面截图
+
+macOS 概览页 —— 实时 CPU / 电池温度、电量，以及近 2 小时趋势图。
+
+![IntelGuardian macOS 概览页](doc/images/dashboard-full.png)
+
+macOS 设置页 —— SMTP 邮件提醒、告警阈值与监测开关。
+
+![IntelGuardian macOS 设置页](doc/images/dashboard-full-settings.png)
+
+---
+
 ## 目录
 
 - [为什么需要 IntelGuardian](#为什么需要-intelguardian)
