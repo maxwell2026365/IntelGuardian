@@ -23,7 +23,7 @@ struct IntelGuardianApp: App {
                 .environmentObject(settings)
                 .environmentObject(monitor)
                 #if os(macOS)
-                .frame(minWidth: 680, idealWidth: 760, minHeight: 420, idealHeight: 470)
+                .frame(minWidth: 680, idealWidth: 760, minHeight: 420, idealHeight: 800)
                 .onAppear {
                     windowOnTop.observe(settings)
                 }

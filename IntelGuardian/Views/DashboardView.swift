@@ -27,27 +27,41 @@ struct DashboardView: View {
     }
 
     var body: some View {
+        #if os(macOS)
+        // macOS: non-scrolling layout — every card plus the CPU ranking fits
+        // in one window. The ranking card absorbs leftover height and shows
+        // as many rows as fit, so nothing ever overflows into a scrollbar.
+        VStack(spacing: 8) {
+            titleRow
+            statusCard
+            currentMetricsGrid
+            uptimeCard
+            chartsCard
+            if !monitor.topProcesses.isEmpty {
+                cpuRankingCard
+            }
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .onAppear {
+            monitor.refreshNow()
+        }
+        #else
         ScrollView {
-            VStack(spacing: 16) {
+            VStack(spacing: 8) {
                 titleRow
                 statusCard
                 currentMetricsGrid
                 uptimeCard
                 chartsCard
-                #if os(macOS)
-                if !monitor.topProcesses.isEmpty {
-                    cpuRankingCard
-                }
-                #endif
             }
             .padding()
         }
-        #if os(iOS)
         .background(Color.black.ignoresSafeArea())
-        #endif
         .onAppear {
             monitor.refreshNow()
         }
+        #endif
     }
 
     private var titleRow: some View {
@@ -67,31 +81,26 @@ struct DashboardView: View {
     // MARK: - Status
 
     private var statusCard: some View {
-        VStack(spacing: 6) {
-            if monitor.isMonitoring {
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(Color.green)
-                        .frame(width: 10, height: 10)
-                    Text("监测中 · 每 30 秒采样")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
-            } else {
-                Text("监测未启动")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
-            if let updated = monitor.store.samples.first?.timestamp {
-                Text("最近采样：\(updated.formatted(date: .omitted, time: .standard))")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
+        HStack(spacing: 8) {
+            Circle()
+                .fill(monitor.isMonitoring ? Color.green : Color.gray)
+                .frame(width: 10, height: 10)
+            Text(statusText)
+                .font(.subheadline)
+                .foregroundColor(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .padding()
+        .padding(.vertical, 8)
         .background(Color.cardBackground.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var statusText: String {
+        var text = monitor.isMonitoring ? "监测中 · 每 30 秒采样" : "监测未启动"
+        if let updated = monitor.store.samples.first?.timestamp {
+            text += " · 最近采样 \(updated.formatted(date: .omitted, time: .standard))"
+        }
+        return text
     }
 
     // MARK: - Current values
@@ -147,7 +156,7 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity)
         .frame(maxHeight: .infinity)
-        .padding(.vertical, 12)
+        .padding(.vertical, 8)
         .background(Color.cardBackground.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
@@ -204,7 +213,7 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity, minHeight: 0)
         .frame(maxHeight: .infinity)
-        .padding(.vertical, 12)
+        .padding(.vertical, 8)
         .background(Color.cardBackground.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
@@ -230,7 +239,7 @@ struct DashboardView: View {
             }
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12)
+        .padding(.vertical, 8)
         .background(Color.cardBackground.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
@@ -259,7 +268,7 @@ struct DashboardView: View {
     // MARK: - Charts
 
     private var chartsCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 10) {
             Text("趋势（近 2 小时）")
                 .font(.headline)
 
@@ -269,7 +278,7 @@ struct DashboardView: View {
                 legacyCharts
             }
         }
-        .padding()
+        .padding(10)
         .background(Color.cardBackground.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
@@ -352,7 +361,7 @@ struct DashboardView: View {
     }
 
     private var xDomain: ClosedRange<Date> {
-        Date().addingTimeInterval(-3 * 3600)...Date()
+        Date().addingTimeInterval(-2 * 3600)...Date()
     }
 
     // MARK: - CPU usage ranking
@@ -375,7 +384,7 @@ struct DashboardView: View {
     }
 
     private var cpuRankingCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .firstTextBaseline) {
                 Text("CPU 发热 Top")
                     .font(.headline)
@@ -387,11 +396,25 @@ struct DashboardView: View {
 
             rankingHeader
             Divider()
-            ForEach(Array(sortedProcesses.enumerated()), id: \.element.id) { index, process in
-                rankingRow(rank: index + 1, process: process)
+
+            // Show as many rows as fit in the leftover window height so the
+            // overview never scrolls. Rows shrink but stay readable (≥23pt).
+            GeometryReader { geo in
+                let minRow: CGFloat = 23
+                let maxCount = sortedProcesses.count
+                let fit = max(1, Int(geo.size.height / minRow))
+                let count = min(maxCount, fit)
+
+                VStack(spacing: 3) {
+                    ForEach(Array(sortedProcesses.prefix(count).enumerated()), id: \.element.id) { index, process in
+                        rankingRow(rank: index + 1, process: process)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .top)
             }
         }
-        .padding()
+        .padding(10)
         .background(Color.cardBackground.opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
@@ -457,7 +480,7 @@ struct DashboardView: View {
             columnText(percentText(process.cpuUsagePercent), width: 72, align: .trailing, color: usageColor(process.cpuUsagePercent))
             columnText(timeText(process.cpuSeconds), width: 72, align: .trailing, color: percentColor(process.cpuSeconds))
         }
-        .padding(.vertical, 2)
+        .padding(.vertical, 1)
     }
 
     private func columnText(_ text: String, width: CGFloat?, align: Alignment, color: Color = .secondary, header: Bool = false) -> some View {

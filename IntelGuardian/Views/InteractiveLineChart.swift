@@ -178,10 +178,10 @@ struct DualLineChart: View {
 
 // ── macOS three‑series combined chart ──────────────────────────────────────────
 
-/// CPU temperature, battery temperature, and battery level on one shared Y axis.
-/// CPU / battery temp use their raw °C values; battery level (%) maps naturally
-/// onto the same 0–120 range.  Works well because the Y axis auto‑scales by
-/// default — no normalisation needed.
+/// CPU temperature, battery temperature, and battery level on one shared 0–100
+/// Y scale, but with *two* labelled axes: temperature (°C) on the left and
+/// battery level (%) on the right.  °C and % are numerically similar (0–100),
+/// so the raw values map onto the same scale without normalisation.
 @available(iOS 16.0, macOS 13.0, *)
 struct TripleLineChart: View {
     let cpuSeries:   [(Date, Double)]   // °C,  nil-safe (pre-filtered)
@@ -245,6 +245,7 @@ struct TripleLineChart: View {
                     .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
             }
         }
+        .chartYScale(domain: 0...100)
         .chartXScale(domain: xDomain)
         .chartXAxis {
             AxisMarks(values: .automatic(desiredCount: 6)) { value in
@@ -259,9 +260,33 @@ struct TripleLineChart: View {
                 }
             }
         }
-        .chartYAxis { AxisMarks(position: .trailing) }
+        .chartYAxis {
+            // Temperature (°C) on the left, battery level (%) on the right.
+            AxisMarks(position: .leading) { value in
+                AxisGridLine().foregroundStyle(.gray.opacity(0.2))
+                AxisTick()
+                AxisValueLabel {
+                    if let v = value.as(Double.self) {
+                        Text("\(Int(v))°")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            AxisMarks(position: .trailing) { value in
+                AxisGridLine().foregroundStyle(.gray.opacity(0.2))
+                AxisTick()
+                AxisValueLabel {
+                    if let v = value.as(Double.self) {
+                        Text("\(Int(v))%")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.blue)
+                    }
+                }
+            }
+        }
         .chartLegend(.hidden)
-        .frame(height: 150)
+        .frame(height: 207)
         .chartOverlay { proxy in
             GeometryReader { geo in
                 ZStack(alignment: .topLeading) {
